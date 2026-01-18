@@ -28,7 +28,7 @@ app.add_middleware(
 )
 
 # Security
-SECRET_KEY = "your-secret-key-here-change-in-production"
+SECRET_KEY = "a9f3cD8qL2X7VwR0HkN5S1ZyM4B6P8JQ"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
