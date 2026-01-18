@@ -1,5 +1,6 @@
 # backend/models.py
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Float, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
+from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
 
@@ -7,50 +8,44 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False)  # student, teacher, admin
-    full_name = Column(String, nullable=False)
-    grade = Column(Integer, nullable=True)  # 5-10 сынып
+    email = Column(String, unique=True, index=True)
+    full_name = Column(String)
+    hashed_password = Column(String)
+    role = Column(String)  # student, teacher, admin
+    grade = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relations
+    results = relationship("ExperimentResult", back_populates="user")
 
-class Lab(Base):
-    __tablename__ = "labs"
+class Experiment(Base):
+    __tablename__ = "experiments"
     
     id = Column(Integer, primary_key=True, index=True)
-    title_kk = Column(String, nullable=False)
-    title_ru = Column(String, nullable=False)
-    subject = Column(String, nullable=False)  # chemistry, biology, nature
-    grade = Column(Integer, nullable=False)
-    lab_number = Column(String)
-    description_kk = Column(String)
-    description_ru = Column(String)
+    title = Column(String)
+    subject = Column(String)  # chemistry, biology, science
+    grade = Column(Integer)
+    description = Column(String)
+    type = Column(String)  # lab, practical
     difficulty = Column(String)  # easy, medium, hard
-    estimated_time = Column(Integer)  # минутпен
-    config = Column(JSON)  # лабораторияның конфигурациясы
+    duration_minutes = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relations
+    results = relationship("ExperimentResult", back_populates="experiment")
 
-class Result(Base):
-    __tablename__ = "results"
+class ExperimentResult(Base):
+    __tablename__ = "experiment_results"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=False)
-    lab_id = Column(Integer, nullable=False)
-    started_at = Column(DateTime, default=datetime.utcnow)
-    completed_at = Column(DateTime, nullable=True)
-    score = Column(Float)  # 0-100
-    time_spent = Column(Integer)  # секундпен
-    attempts = Column(Integer, default=1)
-    status = Column(String, default="in_progress")  # in_progress, completed, failed
-    answers = Column(JSON)  # қадамдар бойынша жауаптар
-
-class Progress(Base):
-    __tablename__ = "progress"
+    user_id = Column(Integer, ForeignKey("users.id"))
+    experiment_id = Column(Integer, ForeignKey("experiments.id"))
+    score = Column(Integer)
+    max_score = Column(Integer, default=100)
+    time_spent_seconds = Column(Integer)
+    answers = Column(JSON)
+    completed_at = Column(DateTime, default=datetime.utcnow)
     
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=False)
-    lab_id = Column(Integer, nullable=False)
-    current_step = Column(Integer, default=1)
-    last_accessed = Column(DateTime, default=datetime.utcnow)
-    is_completed = Column(Boolean, default=False)
+    # Relations
+    user = relationship("User", back_populates="results")
+    experiment = relationship("Experiment", back_populates="results")

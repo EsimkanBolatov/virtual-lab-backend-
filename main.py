@@ -1,52 +1,47 @@
 # backend/main.py
 from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr
 
 from database import engine, get_db, Base
-from models import User, Lab, Result, Progress
+from models import User, Experiment, ExperimentResult
 
-# Database кестелерін құру
+# Базаны құру
 Base.metadata.create_all(bind=engine)
 
-# Security
-SECRET_KEY = "your-secret-key-change-in-production-12345"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 сағат
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-
 # FastAPI app
-app = FastAPI(title="Virtual Lab API", version="1.0.0")
+app = FastAPI(title="Virtual Lab API")
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== PYDANTIC SCHEMAS ====================
+# Security
+SECRET_KEY = "your-secret-key-here-change-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+# Pydantic models
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
     role: str = "student"
     grade: Optional[int] = None
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
 
 class UserResponse(BaseModel):
     id: int
@@ -58,102 +53,76 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class LabCreate(BaseModel):
-    title_kk: str
-    title_ru: str
-    subject: str
-    grade: int
-    lab_number: Optional[str] = None
-    description_kk: Optional[str] = None
-    description_ru: Optional[str] = None
-    difficulty: Optional[str] = "medium"
-    estimated_time: Optional[int] = 20
-    config: Optional[Dict] = {}
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
-class LabResponse(BaseModel):
-    id: int
-    title_kk: str
-    title_ru: str
+class ExperimentCreate(BaseModel):
+    title: str
     subject: str
     grade: int
-    lab_number: Optional[str]
-    difficulty: Optional[str]
-    estimated_time: Optional[int]
+    description: str
+    type: str
+    difficulty: str
+    duration_minutes: int
+
+class ExperimentResponse(BaseModel):
+    id: int
+    title: str
+    subject: str
+    grade: int
+    description: str
+    type: str
+    difficulty: str
+    duration_minutes: int
     
     class Config:
         from_attributes = True
 
-class ResultCreate(BaseModel):
-    lab_id: int
-    answers: Dict[str, Any]
-    time_spent: int
+class ExperimentResultCreate(BaseModel):
+    experiment_id: int
+    score: int
+    time_spent_seconds: int
+    answers: dict
 
-class ResultResponse(BaseModel):
+class ExperimentResultResponse(BaseModel):
     id: int
-    lab_id: int
-    score: Optional[float]
-    status: str
-    completed_at: Optional[datetime]
+    user_id: int
+    experiment_id: int
+    score: int
+    max_score: int
+    time_spent_seconds: int
+    completed_at: datetime
     
     class Config:
         from_attributes = True
 
-# ==================== HELPER FUNCTIONS ====================
-
+# Helper functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-def create_access_token(data: dict):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise credentials_exception
-    return user
+def get_user_by_email(db: Session, email: str):
+    return db.query(User).filter(User.email == email).first()
 
-def calculate_score(answers: Dict[str, Any]) -> float:
-    """Нәтижені есептеу функциясы"""
-    correct = sum(1 for a in answers.values() if a.get("correct", False))
-    total = len(answers)
-    return round((correct / total * 100) if total > 0 else 0, 2)
-
-# ==================== ROUTES: AUTH ====================
-
-@app.post("/auth/register", response_model=UserResponse)
-def register(user: UserCreate, db: Session = Depends(get_db)):
-    """Жаңа пайдаланушыны тіркеу"""
-    # Email тексеру
-    if db.query(User).filter(User.email == user.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Жаңа пайдаланушы құру
+def create_user(db: Session, user: UserCreate):
+    hashed_password = get_password_hash(user.password)
     db_user = User(
         email=user.email,
-        password_hash=get_password_hash(user.password),
         full_name=user.full_name,
+        hashed_password=hashed_password,
         role=user.role,
         grade=user.grade
     )
@@ -162,99 +131,168 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     db.refresh(db_user)
     return db_user
 
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Тексеру сәтсіз аяқталды",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = get_user_by_email(db, email=email)
+    if user is None:
+        raise credentials_exception
+    return user
+
+# Routes
+@app.get("/")
+def root():
+    return {"message": "Virtual Lab API", "status": "active"}
+
+@app.post("/auth/register", response_model=UserResponse)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = get_user_by_email(db, email=user.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email тіркелген")
+    return create_user(db=db, user=user)
+
 @app.post("/auth/login", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    """Жүйеге кіру"""
-    user = db.query(User).filter(User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.password_hash):
+    user = get_user_by_email(db, email=form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail="Email немесе құпия сөз қате",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    access_token = create_access_token(data={"sub": user.id})
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/auth/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    """Ағымдағы пайдаланушы деректерін алу"""
+def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
-# ==================== ROUTES: LABS ====================
-
-@app.post("/labs", response_model=LabResponse)
-def create_lab(lab: LabCreate, db: Session = Depends(get_db)):
-    """Жаңа лабораторияны құру"""
-    db_lab = Lab(**lab.dict())
-    db.add(db_lab)
-    db.commit()
-    db.refresh(db_lab)
-    return db_lab
-
-@app.get("/labs", response_model=List[LabResponse])
-def get_labs(
+@app.get("/experiments", response_model=List[ExperimentResponse])
+def get_experiments(
     grade: Optional[int] = None,
     subject: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """Лабораторияларды алу (фильтрлермен)"""
-    query = db.query(Lab)
+    query = db.query(Experiment)
     if grade:
-        query = query.filter(Lab.grade == grade)
+        query = query.filter(Experiment.grade == grade)
     if subject:
-        query = query.filter(Lab.subject == subject)
+        query = query.filter(Experiment.subject == subject)
     return query.all()
 
-@app.get("/labs/{lab_id}")
-def get_lab(lab_id: int, db: Session = Depends(get_db)):
-    """Жеке лабораторияны алу"""
-    lab = db.query(Lab).filter(Lab.id == lab_id).first()
-    if not lab:
-        raise HTTPException(status_code=404, detail="Lab not found")
-    return lab
+@app.get("/experiments/{experiment_id}", response_model=ExperimentResponse)
+def get_experiment(experiment_id: int, db: Session = Depends(get_db)):
+    experiment = db.query(Experiment).filter(Experiment.id == experiment_id).first()
+    if not experiment:
+        raise HTTPException(status_code=404, detail="Тәжірибе табылмады")
+    return experiment
 
-# ==================== ROUTES: RESULTS ====================
-
-@app.post("/results", response_model=ResultResponse)
-def create_result(
-    result_data: ResultCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+@app.post("/experiments", response_model=ExperimentResponse)
+def create_experiment(
+    experiment: ExperimentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """Нәтижені сақтау"""
-    score = calculate_score(result_data.answers)
+    if current_user.role not in ["teacher", "admin"]:
+        raise HTTPException(status_code=403, detail="Рұқсат жоқ")
     
-    result = Result(
-        user_id=current_user.id,
-        lab_id=result_data.lab_id,
-        answers=result_data.answers,
-        time_spent=result_data.time_spent,
-        score=score,
-        status="completed",
-        completed_at=datetime.utcnow()
-    )
-    db.add(result)
+    db_experiment = Experiment(**experiment.dict())
+    db.add(db_experiment)
     db.commit()
-    db.refresh(result)
-    return result
+    db.refresh(db_experiment)
+    return db_experiment
 
-@app.get("/results/my", response_model=List[ResultResponse])
-def get_my_results(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+@app.post("/results", response_model=ExperimentResultResponse)
+def save_result(
+    result: ExperimentResultCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """Менің нәтижелерім"""
-    return db.query(Result).filter(Result.user_id == current_user.id).all()
+    db_result = ExperimentResult(
+        user_id=current_user.id,
+        experiment_id=result.experiment_id,
+        score=result.score,
+        time_spent_seconds=result.time_spent_seconds,
+        answers=result.answers
+    )
+    db.add(db_result)
+    db.commit()
+    db.refresh(db_result)
+    return db_result
 
-# ==================== ROOT ====================
+@app.get("/results/my", response_model=List[ExperimentResultResponse])
+def get_my_results(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return db.query(ExperimentResult).filter(
+        ExperimentResult.user_id == current_user.id
+    ).all()
 
-@app.get("/")
-def root():
-    return {
-        "message": "Virtual Lab API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+# Seed data (тәжірибелерді қосу)
+@app.post("/seed")
+def seed_experiments(db: Session = Depends(get_db)):
+    experiments_data = [
+        {
+            "title": "Тұз қышқылының бейтараптану реакциясы",
+            "subject": "chemistry",
+            "grade": 7,
+            "description": "HCl және NaOH бейтараптану реакциясы",
+            "type": "lab",
+            "difficulty": "easy",
+            "duration_minutes": 20
+        },
+        {
+            "title": "Ерітінділер концентрациясын есептеу",
+            "subject": "chemistry",
+            "grade": 8,
+            "description": "Пайыздық және молярлық концентрацияларды дайындау",
+            "type": "practical",
+            "difficulty": "medium",
+            "duration_minutes": 30
+        },
+        {
+            "title": "Мыс пен мырыш иондарын тану",
+            "subject": "chemistry",
+            "grade": 10,
+            "description": "Cu²⁺, Zn²⁺ иондарына сапалық реакциялар",
+            "type": "lab",
+            "difficulty": "medium",
+            "duration_minutes": 25
+        },
+        {
+            "title": "Митозды микроскопта зерттеу",
+            "subject": "biology",
+            "grade": 9,
+            "description": "Пияз тамыр ұшындағы митоз фазалары",
+            "type": "lab",
+            "difficulty": "hard",
+            "duration_minutes": 40
+        }
+    ]
+    
+    for exp_data in experiments_data:
+        existing = db.query(Experiment).filter(Experiment.title == exp_data["title"]).first()
+        if not existing:
+            experiment = Experiment(**exp_data)
+            db.add(experiment)
+    
+    db.commit()
+    return {"message": "Тәжірибелер қосылды"}
 
 if __name__ == "__main__":
     import uvicorn
