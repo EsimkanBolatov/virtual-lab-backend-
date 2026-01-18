@@ -156,10 +156,19 @@ def root():
 
 @app.post("/auth/register", response_model=UserResponse)
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = get_user_by_email(db, email=user.email)
-    if db_user:
-        raise HTTPException(status_code=400, detail="Email тіркелген")
-    return create_user(db=db, user=user)
+    try:
+        db_user = get_user_by_email(db, email=user.email)
+        if db_user:
+            raise HTTPException(status_code=400, detail="Email тіркелген")
+        return create_user(db=db, user=user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Registration error: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Тіркелу қатесі. Базаны қайта құрыңыз: rm virtual_lab.db"
+        )
 
 @app.post("/auth/login", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
